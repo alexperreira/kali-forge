@@ -49,7 +49,12 @@ chmod +x capture-kali-state.sh
 
 The output you need is **`15-packages.txt`** — the full manual package list, one name per line, architecture suffixes already stripped.
 
-Also grab `20-pipx.txt` and `25-go-tools.txt`. Those are the tools that drift silently, because you install them mid-box at 2am and never write them down. `25-go-tools.txt` recovers the original module path from each binary, so you get `github.com/projectdiscovery/nuclei/v3/cmd/nuclei` rather than just "nuclei".
+Also grab `20-pipx-names.txt` and `25-go-tools.txt`. Those are the tools that drift silently, because you install them mid-box at 2am and never write them down.
+
+- `20-pipx-names.txt` is the clean `name==version` list. (`20-pipx.txt` is the raw human-readable form — a package with 68 entry points buries the one line you need, which is why the JSON-derived version exists.)
+- `25-go-tools.txt` recovers the original module path from each binary, so you get `github.com/projectdiscovery/nuclei/v3/cmd/nuclei` rather than just "nuclei".
+
+If `26-pipx-symlink-diagnosis.txt` appears, read it — see [The impacket collision](#the-impacket-collision).
 
 ### 2. Build the new VM
 
@@ -109,6 +114,37 @@ Turn on **Staggered File Versioning**. It's your undo button for the one time yo
 ### 7. Snapshot
 
 In VMware, snapshot both VMs as `clean-forge`. When a box requires installing something invasive, revert afterward rather than living with the residue.
+
+---
+
+## The impacket collision
+
+Worth understanding, because the old VM is already in this state and copying it forward would replicate a broken install.
+
+`pipx list` on the old VM reports **"symlink missing or pointing to unexpected location"** for all ~68 impacket scripts and for `wenum`. That message means pipx installed the package into its venv but could not put the entry points into `~/.local/bin` — either the symlink is absent, or it exists and resolves somewhere else.
+
+The usual cause on Kali is that **apt got there first**. Kali ships `python3-impacket` and `impacket-scripts`; those own `/usr/bin/psexec.py` and friends. pipx won't clobber a file it doesn't own, so it skips and warns.
+
+The consequence is the part that matters: **you may have been running Kali's impacket all along, not the 0.13.0 you pipx-installed.** Silent, and it surfaces at the worst time — when a flag that exists in 0.13.0 isn't there in the version actually on your PATH.
+
+Confirm it on the old VM with:
+
+```bash
+which -a psexec.py
+ls -la ~/.local/bin/psexec.py
+dpkg -S $(readlink -f $(which psexec.py))
+```
+
+The capture script now writes `26-pipx-symlink-diagnosis.txt` with all of that pre-run.
+
+**How the rebuild resolves it.** `group_vars/all.yml` has an `impacket_source` switch, set to `pipx` because your 0.13.0 pin looks deliberate:
+
+- `impacket_source: pipx` — the playbook removes `impacket-scripts` (but keeps `python3-impacket`, since crackmapexec and responder link against the library), so pipx owns the script names cleanly.
+- `impacket_source: apt` — drop `impacket` from `pipx_packages` and let Kali's version win.
+
+The playbook then verifies the result rather than assuming it: it re-runs `pipx list`, repairs with `pipx reinstall-all` if entry points are still shadowed, and prints which binary `psexec.py` actually resolves to alongside what you configured. If those disagree it says so.
+
+One PATH detail that matters here: `forge.zsh` puts `~/.local/bin` **ahead** of `/usr/bin`. With `impacket_source: pipx` that's what you want. If you switch to `apt`, reorder it or the pipx venv will keep winning.
 
 ---
 

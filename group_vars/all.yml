@@ -95,7 +95,9 @@ apt_packages_ad:
   - bloodhound
   - neo4j
   - crackmapexec
-  - impacket-scripts
+  # impacket-scripts is NOT listed here — it's added conditionally by the
+  # apt_tools role based on impacket_source above, so it can't collide with
+  # the pipx install.
   - responder
   - evil-winrm
   - smbclient
@@ -112,13 +114,32 @@ apt_packages_gui:
 # pipx — Python CLI tools, each in its own venv. Never `pip install --user`
 # on Kali; you will eventually break the system Python.
 # -----------------------------------------------------------------------------
+# Captured from the old VM (20-pipx.json). These are the real two — the rest of
+# what a Kali box needs comes from apt.
 pipx_packages:
-  - certipy-ad
-  - name-that-hash
-  - hashid
-  - updog
-  - git-dumper
-  - uv
+  - impacket==0.13.0
+  - wenum
+
+# -----------------------------------------------------------------------------
+# impacket: apt or pipx? Pick one. Do not run both.
+#
+# Kali ships python3-impacket + impacket-scripts from apt. pipx installs its own
+# copy into ~/.local/share/pipx/venvs/impacket and tries to symlink ~60 scripts
+# (psexec.py, secretsdump.py, ...) into ~/.local/bin. If apt already owns those
+# filenames, pipx skips them and reports "symlink missing or pointing to
+# unexpected location" — which is exactly what the old VM is reporting.
+#
+# The practical failure: you think you're running 0.13.0 and you're running
+# whatever apt shipped, or vice versa depending on PATH order. Silent, and it
+# bites during an engagement when a newer flag doesn't exist.
+#
+#   pipx  — you want a specific/newer impacket than Kali packages (0.13.0 here).
+#           The playbook removes impacket-scripts so pipx owns the names cleanly.
+#   apt   — you want whatever Kali ships and don't care about the version.
+#           The playbook drops impacket from pipx_packages.
+#
+# Set to 'pipx' because the old VM has 0.13.0 pinned deliberately.
+impacket_source: pipx
 
 # -----------------------------------------------------------------------------
 # Go tools — installed with `go install`. Pin versions where it matters;

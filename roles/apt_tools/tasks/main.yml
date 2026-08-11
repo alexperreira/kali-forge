@@ -108,6 +108,45 @@
   become: true
   when: profile.install_ad_tooling | bool
 
+# -----------------------------------------------------------------------------
+# impacket: exactly one source wins. See the long note in group_vars/all.yml.
+# -----------------------------------------------------------------------------
+- name: Install impacket from apt
+  ansible.builtin.apt:
+    name:
+      - python3-impacket
+      - impacket-scripts
+    state: present
+  become: true
+  when:
+    - profile.install_ad_tooling | bool
+    - impacket_source == 'apt'
+
+- name: Remove apt impacket so pipx owns the script names
+  ansible.builtin.apt:
+    name:
+      - impacket-scripts
+    state: absent
+  become: true
+  when:
+    - profile.install_ad_tooling | bool
+    - impacket_source == 'pipx'
+  # Only impacket-scripts is removed, not python3-impacket. Other Kali tools
+  # (crackmapexec, responder) depend on the library, and removing it would
+  # cascade. It's the /usr/bin script names that collide, not the module.
+
+- name: Guard against a bulk manifest re-adding impacket-scripts
+  ansible.builtin.debug:
+    msg: >-
+      NOTE: impacket-scripts appears in your bulk packages.txt but
+      impacket_source is 'pipx'. It was installed by the bulk step and then
+      removed. Delete it from roles/apt_tools/files/packages.txt to stop the
+      install/remove churn on every run.
+  when:
+    - impacket_source == 'pipx'
+    - apt_tools_manifest.stat.exists
+    - "'impacket-scripts' in (apt_tools_installable | default([]))"
+
 - name: Install GUI extras
   ansible.builtin.apt:
     name: "{{ apt_packages_gui }}"

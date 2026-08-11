@@ -136,6 +136,62 @@ log "Language-ecosystem tools (pipx, pip, go, cargo, npm, gem)"
 
 grab 20-pipx.txt        pipx list
 grab 21-pip-user.txt    bash -c 'pip list --user --format=freeze 2>/dev/null || pip3 list --user --format=freeze 2>/dev/null'
+
+# `pipx list` is human-readable and verbose — a package with 60 entry points
+# buries the one line you need. The JSON form gives you just the package names.
+if command -v pipx >/dev/null 2>&1; then
+  pipx list --json > "$OUTDIR/20-pipx.json" 2>/dev/null || echo '{}' > "$OUTDIR/20-pipx.json"
+  # Flat list of package specs, ready to paste into group_vars.
+  python3 - "$OUTDIR/20-pipx.json" > "$OUTDIR/20-pipx-names.txt" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+for name, v in (d.get("venvs") or {}).items():
+    meta = ((v.get("metadata") or {}).get("main_package")) or {}
+    print(f"{name}=={meta.get('package_version','')}".rstrip("="))
+PY
+
+  # Broken entry points. pipx says "symlink missing or pointing to unexpected
+  # location" when ~/.local/bin/<app> is absent, or exists but resolves
+  # somewhere other than the pipx venv — usually because an apt package already
+  # owns that filename. Worth knowing BEFORE you replicate the setup, because
+  # it means the pipx copy may not be the one actually running.
+  if grep -q 'symlink missing or pointing to unexpected location' "$OUTDIR/20-pipx.txt" 2>/dev/null; then
+    {
+      echo "pipx reports broken/shadowed entry points."
+      echo
+      echo "This means ~/.local/bin/<app> is missing, or points somewhere other"
+      echo "than the pipx venv. The usual cause is that an apt package already"
+      echo "installed a binary with the same name, so pipx declined to clobber it."
+      echo
+      echo "Consequence: the pipx version may be installed but never actually run."
+      echo
+      echo "=== which binary actually wins on PATH ==="
+      for app in psexec.py secretsdump.py ntlmrelayx.py wmiexec.py GetUserSPNs.py wenum; do
+        printf '%-20s ' "$app"
+        command -v -- "$app" 2>/dev/null || echo "(not on PATH)"
+      done
+      echo
+      echo "=== what ~/.local/bin actually contains for these ==="
+      for app in psexec.py secretsdump.py ntlmrelayx.py wenum; do
+        if [[ -e "$HOME/.local/bin/$app" || -L "$HOME/.local/bin/$app" ]]; then
+          printf '%-20s -> %s\n' "$app" "$(readlink -f "$HOME/.local/bin/$app" 2>/dev/null || echo '<broken link>')"
+        else
+          printf '%-20s %s\n' "$app" "<absent>"
+        fi
+      done
+      echo
+      echo "=== apt packages that provide impacket ==="
+      dpkg -l 2>/dev/null | grep -iE 'impacket' || echo "(none installed via apt)"
+      echo
+      echo "Fix on the OLD VM (optional):  pipx reinstall-all"
+      echo "On the NEW VM this resolves itself — see README, 'The impacket collision'."
+    } > "$OUTDIR/26-pipx-symlink-diagnosis.txt"
+    warn "pipx entry points are broken/shadowed — see 26-pipx-symlink-diagnosis.txt"
+  fi
+fi
 grab 22-cargo.txt       cargo install --list
 grab 23-npm-global.txt  npm ls -g --depth=0
 grab 24-gem.txt         gem list --local --no-versions

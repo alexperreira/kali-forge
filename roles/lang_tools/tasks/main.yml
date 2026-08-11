@@ -41,6 +41,79 @@
     | list | length > 0
 
 # -----------------------------------------------------------------------------
+# Verify pipx actually owns its entry points.
+#
+# pipx installs the package into a venv, then symlinks each console script into
+# ~/.local/bin. If a file with that name already exists and isn't pipx's, pipx
+# refuses to overwrite it and reports "symlink missing or pointing to unexpected
+# location". The package is installed but you never run it — you run whatever
+# already owned the name.
+#
+# This is silent by default, which is why it's checked explicitly here.
+# -----------------------------------------------------------------------------
+- name: Check pipx entry point health
+  ansible.builtin.command: pipx list
+  register: lang_tools_pipx_health
+  changed_when: false
+  failed_when: false
+
+- name: Repair shadowed pipx entry points
+  ansible.builtin.command: pipx reinstall-all
+  when: "'symlink missing or pointing to unexpected location' in (lang_tools_pipx_health.stdout | default(''))"
+  register: lang_tools_pipx_repair
+  changed_when: lang_tools_pipx_repair.rc == 0
+  failed_when: false
+  # reinstall-all rebuilds each venv and re-attempts the symlinks. It only helps
+  # once the colliding apt package is gone — which the apt_tools role handles
+  # when impacket_source is 'pipx'. Role order in site.yml matters here:
+  # apt_tools runs before lang_tools.
+
+- name: Re-check entry point health after repair
+  ansible.builtin.command: pipx list
+  register: lang_tools_pipx_recheck
+  changed_when: false
+  failed_when: false
+  when: lang_tools_pipx_repair is changed  # noqa no-handler
+
+- name: Warn if entry points are still shadowed
+  ansible.builtin.debug:
+    msg:
+      - "pipx entry points are STILL shadowed after reinstall-all."
+      - "Something outside pipx owns those filenames in ~/.local/bin."
+      - "Diagnose with:  which -a psexec.py  &&  ls -la ~/.local/bin/psexec.py"
+      - "Then check:     dpkg -S $(readlink -f ~/.local/bin/psexec.py)"
+  when: >-
+    'symlink missing or pointing to unexpected location'
+    in (lang_tools_pipx_recheck.stdout | default(lang_tools_pipx_health.stdout | default('')))
+
+- name: Confirm which impacket actually runs
+  ansible.builtin.shell:
+    cmd: "set -o pipefail && command -v -a psexec.py 2>/dev/null | head -3 || true"
+    executable: /bin/bash
+  register: lang_tools_impacket_path
+  changed_when: false
+  failed_when: false
+  when: impacket_source is defined
+
+- name: Work out whether the winning impacket matches the configured source
+  ansible.builtin.set_fact:
+    lang_tools_impacket_ok: >-
+      {{ ('.local' in (lang_tools_impacket_path.stdout | default('')) and impacket_source == 'pipx')
+         or ('/usr/bin' in (lang_tools_impacket_path.stdout | default('')) and impacket_source == 'apt') }}
+  when: impacket_source is defined
+
+- name: Report the winning impacket
+  ansible.builtin.debug:
+    msg:
+      - "impacket_source: {{ impacket_source }}"
+      - "psexec.py resolves to: {{ lang_tools_impacket_path.stdout_lines | default(['(not on PATH)']) }}"
+      - >-
+        {{ 'consistent with impacket_source'
+           if lang_tools_impacket_ok | bool
+           else 'MISMATCH — check PATH order in ~/.config/forge/forge.zsh' }}
+  when: impacket_source is defined
+
+# -----------------------------------------------------------------------------
 # Go
 # -----------------------------------------------------------------------------
 - name: Ensure GOPATH bin exists
