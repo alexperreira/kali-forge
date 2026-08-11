@@ -67,35 +67,74 @@ cd ~/kali-forge
 
 ### 3. Validate the package list against current Kali
 
-Copy `15-packages.txt` over, then:
+Copy the capture directory over to the new VM, then:
 
 ```bash
-./scripts/validate-package-list.sh 15-packages.txt
+./scripts/validate-package-list.sh ~/kali-state-oldvm-20260811-1541/15-packages.txt
 ```
 
-You get four files back:
+You get four files back, written next to the input:
 
 - `.present.txt` — already in the base image, nothing to do
 - `.ok.txt` — exists in apt, will install cleanly
 - `.missing.txt` — no longer exists, needs a decision
 - `.report.txt` — the missing ones **with rename suggestions**
 
-The report auto-detects the two most common rename patterns: python2→python3, and transitional `-ng` packages. For the rest it does a name search and offers candidates. Skim it — it's usually five minutes of work, and you can ignore most of it.
+The report auto-detects the two most common rename patterns: python2→python3, and transitional `-ng` packages. For the rest it does a name search and offers candidates. Skim it — usually five minutes, and you can ignore most of it.
 
-### 4. Install
+Run this **before** the fold. The fold picks up `.ok.txt` if it exists and uses the raw list otherwise, so validating first means the manifest lands pre-cleaned.
+
+### 4. Fold the capture into the repo
 
 ```bash
-cp 15-packages.ok.txt roles/apt_tools/files/packages.txt
+./scripts/fold-capture.sh ~/kali-state-oldvm-20260811-1541 --dry-run   # look first
+./scripts/fold-capture.sh ~/kali-state-oldvm-20260811-1541             # apply
+```
+
+This is the step that used to read "spend an hour hand-editing group_vars." It's mechanical, so it's scripted. Where each capture file lands:
+
+| Capture output | Destination | What it becomes |
+|---|---|---|
+| `15-packages.txt` (or `.ok.txt`) | `roles/apt_tools/files/packages.txt` | the bulk manifest |
+| `20-pipx-names.txt` | `group_vars/all/zz-captured.yml` | `pipx_packages` |
+| `25-go-tools.txt` | `group_vars/all/zz-captured.yml` | `go_packages` |
+| `30-manual-tools.txt` | `group_vars/all/zz-captured.yml` | `opt_repos` |
+| `00-system.txt` | `group_vars/all/zz-captured.yml` | `forge_user`, `forge_timezone` |
+| `40-dotfiles/` | reported, not copied | you choose per-file |
+| `14-apt-sources.txt` | reported, not applied | third-party repos — see below |
+
+**`group_vars/all` is a directory, not a file.** Ansible merges every file in it alphabetically, later winning:
+
+- `main.yml` — hand-written. Policy, toggles, decisions like `impacket_source`. Yours to edit.
+- `zz-captured.yml` — generated. Overwritten completely on every fold. Never hand-edit it.
+
+The `zz-` prefix makes it sort last so captured data beats the placeholder defaults in `main.yml`, while everything you decided by hand survives a re-fold untouched.
+
+Dotfiles are deliberately **not** copied automatically — `roles/dotfiles/files/` holds curated versions the playbook manages, and silently overwriting them with a five-year-old `.zshrc` would be the wrong default. The script lists what it found and gives you the `cp` command.
+
+**The one gap worth knowing about:** if your old VM has third-party apt repos, the script reports them loudly but cannot set them up. Packages from those repos will show as "retired" on the new VM because no such repo is configured there. You need to add the repo and its signing key by hand before those names resolve. `14-apt-sources.txt` has the sources and keyring paths.
+
+Check what the fold produced before running anything:
+
+```bash
+git diff --stat
+git diff group_vars/
+make check          # dry run of the whole playbook
+```
+
+### 5. Install
+
+```bash
 ./bootstrap.sh desktop
 ```
 
-Or skip the playbook for the package step alone:
+Or install just the packages, skipping the playbook entirely:
 
 ```bash
-./scripts/validate-package-list.sh 15-packages.txt --apply
+./scripts/validate-package-list.sh ~/kali-state-*/15-packages.txt --apply
 ```
 
-### 5. Build the laptop VM
+### 6. Build the laptop VM
 
 Same image, same repo, same `packages.txt`:
 
@@ -105,13 +144,13 @@ Same image, same repo, same `packages.txt`:
 
 The `laptop` profile skips heavy GUI tools but keeps SecLists — you want wordlists offline on a plane more than you want a screen recorder.
 
-### 6. Pair Syncthing
+### 7. Pair Syncthing
 
 On both VMs, open `http://127.0.0.1:8384`, add each other as a remote device, share a folder with ID `vault` pointing at `~/vault`.
 
 Turn on **Staggered File Versioning**. It's your undo button for the one time you `rm -rf` the wrong directory and it replicates in four seconds.
 
-### 7. Snapshot
+### 8. Snapshot
 
 In VMware, snapshot both VMs as `clean-forge`. When a box requires installing something invasive, revert afterward rather than living with the residue.
 
@@ -229,12 +268,15 @@ Moved by hand, once per machine, never committed:
 kali-forge/
 ├── bootstrap.sh                    one command on a fresh VM
 ├── site.yml                        the playbook
-├── group_vars/all.yml              curated groups + toggles
+├── group_vars/all/
+│   ├── main.yml                    hand-written: policy, toggles, decisions
+│   └── zz-captured.yml             GENERATED by fold-capture.sh
 ├── requirements.yml                Ansible collections
-├── Makefile                        make apply / check / lint
+├── Makefile                        make apply / check / lint / fold
 ├── scripts/
 │   ├── capture-kali-state.sh       run inside the OLD VM
-│   └── validate-package-list.sh    run on the NEW VM
+│   ├── validate-package-list.sh    run on the NEW VM, before folding
+│   └── fold-capture.sh             writes the capture into this repo
 └── roles/
     ├── base/                       hostname, locale, sudo, sysctl
     ├── vmware_guest/               open-vm-tools, HGFS
@@ -249,8 +291,8 @@ kali-forge/
 
 Two package sources, both active:
 
-- **`roles/apt_tools/files/packages.txt`** — the bulk manifest from your old VM. Hundreds of lines, unsorted, uncurated. This is the main path.
-- **`group_vars/all.yml`** — curated groups (`apt_packages_core`, `_web`, `_ad`, `_gui`). Additive on top of the bulk list, and useful for things you want grouped and documented, or for a from-scratch minimal build.
+- **`roles/apt_tools/files/packages.txt`** — the bulk manifest from your old VM. Hundreds of lines, uncurated. This is the main path.
+- **`group_vars/all/main.yml`** — curated groups (`apt_packages_core`, `_web`, `_ad`, `_gui`). Additive on top of the bulk list, and useful for things you want grouped and documented, or for a from-scratch minimal build.
 
 ---
 
