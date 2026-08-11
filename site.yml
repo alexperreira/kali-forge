@@ -1,0 +1,76 @@
+---
+- name: Forge a Kali workstation
+  hosts: localhost
+  gather_facts: true
+
+  pre_tasks:
+    - name: Refuse to run as root
+      ansible.builtin.assert:
+        that:
+          - ansible_user_id != 'root'
+        fail_msg: >-
+          Run this as your normal user, not root. The playbook escalates
+          per-task with become. Running the whole thing as root leaves
+          root-owned files scattered through your home directory.
+        quiet: true
+
+    - name: Confirm this is actually Kali
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Kali GNU/Linux'
+        fail_msg: >-
+          This playbook targets Kali. Detected: {{ ansible_distribution }}.
+          Override with -e "skip_distro_check=true" if you know what you're doing.
+        quiet: true
+      when: not (skip_distro_check | default(false) | bool)
+
+    - name: Resolve the active profile
+      ansible.builtin.set_fact:
+        profile: "{{ forge_profile_config[forge_profile] }}"
+
+    - name: Announce the plan
+      ansible.builtin.debug:
+        msg:
+          - "profile:  {{ forge_profile }}"
+          - "user:     {{ forge_user }}"
+          - "seclists: {{ profile.install_seclists }}"
+          - "heavy:    {{ profile.install_heavy_gui }}"
+          - "AD tools: {{ profile.install_ad_tooling }}"
+
+    - name: Update apt cache (once, up front)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      become: true
+
+  roles:
+    - role: base
+      tags: [base]
+
+    - role: vmware_guest
+      tags: [vmware]
+      when: enable_vmware_tools | bool
+
+    - role: apt_tools
+      tags: [apt, tools]
+
+    - role: lang_tools
+      tags: [lang, tools]
+
+    - role: opt_tools
+      tags: [opt, tools]
+
+    - role: dotfiles
+      tags: [dotfiles]
+
+    - role: datasync
+      tags: [data, sync]
+
+  post_tasks:
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "Forge complete."
+          - "Log out and back in for shell and group changes to apply."
+          - "Data root: {{ forge_data_root }}"
+          - "Next: check `syncthing` status at http://127.0.0.1:8384"

@@ -1,0 +1,127 @@
+---
+# The data layer.
+#
+# The split that makes this whole approach work:
+#
+#   REBUILT  — tools, config, packages, dotfiles.  Defined in this repo.
+#              Never synced. Recreated by the playbook.
+#
+#   SYNCED   — notes, engagement dirs, your own scripts, loot.
+#              Lives in ~/vault. Never in this repo. Syncthing keeps it
+#              identical on both VMs.
+#
+#   NEITHER  — SSH keys, VPN configs, Burp license, API tokens.
+#              Moved by hand, once, deliberately. See README.
+#
+# Getting this split right is the difference between a setup that stays in
+# sync for a year and one that quietly rots in three weeks.
+
+- name: Create the vault root
+  ansible.builtin.file:
+    path: "{{ forge_data_root }}"
+    state: directory
+    owner: "{{ forge_user }}"
+    group: "{{ forge_user }}"
+    mode: "0700"
+
+- name: Create vault subdirectories
+  ansible.builtin.file:
+    path: "{{ forge_data_root }}/{{ item }}"
+    state: directory
+    owner: "{{ forge_user }}"
+    group: "{{ forge_user }}"
+    mode: "0700"
+  loop: "{{ forge_data_dirs }}"
+
+- name: Drop a README in the vault
+  ansible.builtin.copy:
+    dest: "{{ forge_data_root }}/README.md"
+    mode: "0644"
+    content: |
+      # vault
+
+      Synced between both Kali VMs by Syncthing. This directory is DATA.
+
+      Do not put installed tools, config, or anything the playbook can
+      recreate in here. If you find yourself wanting to, add it to
+      kali-forge/group_vars/all.yml instead.
+
+      Do not put unencrypted credentials in loot/ if this vault ever syncs
+      through an untrusted relay. Use the encrypted-folder option in
+      Syncthing, or keep a KeePassXC database here instead of flat files.
+
+- name: Install Syncthing
+  ansible.builtin.apt:
+    name: syncthing
+    state: present
+  become: true
+  when: enable_syncthing | bool
+
+- name: Enable syncthing for the user
+  ansible.builtin.systemd_service:
+    name: "syncthing@{{ forge_user }}"
+    enabled: true
+    state: started
+    scope: system
+    daemon_reload: true
+  become: true
+  when: enable_syncthing | bool
+  failed_when: false
+
+- name: Wait for syncthing config to be generated
+  ansible.builtin.wait_for:
+    path: "{{ forge_home }}/.local/state/syncthing/config.xml"
+    timeout: 60
+  when: enable_syncthing | bool
+  failed_when: false
+
+- name: Read this machine's syncthing device ID
+  ansible.builtin.command: syncthing --device-id
+  register: datasync_st_id
+  changed_when: false
+  failed_when: false
+  when: enable_syncthing | bool
+
+- name: Show pairing instructions
+  ansible.builtin.debug:
+    msg:
+      - "Syncthing device ID for this VM:"
+      - "  {{ datasync_st_id.stdout | default('(not ready — run: syncthing --device-id)') }}"
+      - ""
+      - "Pairing is a one-time manual step, by design:"
+      - "  1. Open http://127.0.0.1:8384 on BOTH VMs"
+      - "  2. Add Remote Device, paste the other VM's ID"
+      - "  3. Share a folder with path {{ forge_data_root }}, folder ID 'vault'"
+      - "  4. Set File Versioning to 'Staggered' — this is your undo button"
+      - ""
+      - "Do NOT set 'Send Only' on either side. You edit from both."
+  when: enable_syncthing | bool
+
+- name: Install the pre-shutdown sync check
+  ansible.builtin.copy:
+    dest: "{{ forge_home }}/.local/bin/vault-status"
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Is the vault fully synced? Run before shutting a VM down.
+      # Exit 0 = safe to power off. Exit 1 = still syncing, wait.
+      set -euo pipefail
+      CFG="$HOME/.local/state/syncthing/config.xml"
+      KEY=$(grep -oP '(?<=<apikey>)[^<]+' "$CFG" 2>/dev/null || true)
+      if [[ -z "$KEY" ]]; then
+        echo "cannot read syncthing api key" >&2; exit 2
+      fi
+      COMP=$(curl -s -H "X-API-Key: $KEY" \
+        "http://127.0.0.1:8384/rest/db/completion?folder=vault" \
+        | grep -oP '(?<="completion":)[0-9.]+' || echo 0)
+      printf 'vault sync: %s%%\n' "$COMP"
+      awk -v c="$COMP" 'BEGIN{exit !(c>=100)}'
+  when: enable_syncthing | bool
+
+- name: Note the shutdown discipline
+  ansible.builtin.debug:
+    msg: >-
+      Run `vault-status` before powering off a VM. Unlike image-syncing, a
+      half-synced vault won't corrupt anything — but you will land on the
+      other machine missing the last thing you wrote.
+  when: enable_syncthing | bool

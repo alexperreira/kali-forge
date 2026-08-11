@@ -1,0 +1,69 @@
+---
+# Dotfiles.
+#
+# Design decision: this role does NOT overwrite ~/.zshrc. Kali ships a good
+# one, and clobbering it means every Kali upgrade fights your playbook.
+# Instead it drops a single fragment at ~/.config/forge/forge.zsh and appends
+# one `source` line to .zshrc. All your customisation lives in the fragment,
+# which is version-controlled here. Same pattern for tmux and git.
+
+- name: Create config directory
+  ansible.builtin.file:
+    path: "{{ forge_home }}/.config/forge"
+    state: directory
+    mode: "0755"
+
+- name: Deploy the zsh fragment
+  ansible.builtin.copy:
+    src: forge.zsh
+    dest: "{{ forge_home }}/.config/forge/forge.zsh"
+    mode: "0644"
+  when: enable_zsh_default | bool
+
+- name: Source the fragment from .zshrc
+  ansible.builtin.blockinfile:
+    path: "{{ forge_home }}/.zshrc"
+    marker: "# {mark} kali-forge"
+    block: |
+      [ -f ~/.config/forge/forge.zsh ] && source ~/.config/forge/forge.zsh
+    create: true
+    mode: "0644"
+  when: enable_zsh_default | bool
+
+- name: Set zsh as the login shell
+  ansible.builtin.user:
+    name: "{{ forge_user }}"
+    shell: /usr/bin/zsh
+  become: true
+  when: enable_zsh_default | bool
+
+- name: Deploy tmux config
+  ansible.builtin.copy:
+    src: tmux.conf
+    dest: "{{ forge_home }}/.tmux.conf"
+    mode: "0644"
+  when: enable_tmux_config | bool
+
+- name: Deploy global git config
+  ansible.builtin.copy:
+    src: gitconfig
+    dest: "{{ forge_home }}/.gitconfig"
+    mode: "0644"
+    force: false
+  # force: false — if you've already set a signing key or credential helper
+  # by hand on one machine, this won't stamp on it. Delete the file and
+  # re-run if you want the managed version back.
+
+- name: Create neovim config directory
+  ansible.builtin.file:
+    path: "{{ forge_home }}/.config/nvim"
+    state: directory
+    mode: "0755"
+  when: enable_neovim_config | bool
+
+- name: Deploy neovim config
+  ansible.builtin.copy:
+    src: init.lua
+    dest: "{{ forge_home }}/.config/nvim/init.lua"
+    mode: "0644"
+  when: enable_neovim_config | bool

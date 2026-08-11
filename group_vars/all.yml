@@ -1,0 +1,177 @@
+---
+# =============================================================================
+# kali-forge — single source of truth
+#
+# This is the file you edit. Everything else is machinery.
+# When you install something new in one VM, add it HERE, then re-run the
+# playbook on both. That discipline is the entire point of this approach.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Identity
+# -----------------------------------------------------------------------------
+forge_user: kali                 # the non-root user in the Kali image
+forge_home: "/home/{{ forge_user }}"
+forge_hostname: kali-forge       # overridden per-machine, see below
+forge_timezone: America/Denver
+forge_locale: en_US.UTF-8
+
+# Set at runtime with -e "forge_profile=laptop". Controls the handful of
+# things that legitimately differ between the desktop VM and the travel VM.
+forge_profile: desktop
+
+# Laptop gets a lighter footprint: no 40GB of wordlists, fewer heavy GUI tools.
+forge_profile_config:
+  desktop:
+    install_seclists: true
+    install_heavy_gui: true
+    install_ad_tooling: true
+  laptop:
+    install_seclists: true       # you want these offline on a plane
+    install_heavy_gui: false
+    install_ad_tooling: true
+
+# -----------------------------------------------------------------------------
+# Kali metapackage baseline
+#
+# The official VMware image ships kali-linux-default. Listing it here is
+# documentation, not action — it's already present. Change this only if you
+# want to move to -large or -everything, which is mostly a bad trade
+# (tens of GB for tools you'll never open).
+# -----------------------------------------------------------------------------
+kali_metapackage: kali-linux-default
+
+# -----------------------------------------------------------------------------
+# APT packages you added on top of the base image
+#
+# REPLACE THIS LIST with the contents of 13-apt-manual-extra.txt from the
+# capture script. What's here now is a reasonable HTB/web-app default so the
+# playbook works before you've run the capture.
+# -----------------------------------------------------------------------------
+apt_packages_core:
+  - build-essential
+  - git
+  - curl
+  - wget
+  - jq
+  - ripgrep
+  - fd-find
+  - fzf
+  - bat
+  - tmux
+  - zsh
+  - neovim
+  - htop
+  - tree
+  - unzip
+  - p7zip-full
+  - xclip
+  - python3-pip
+  - python3-venv
+  - pipx
+  - golang-go
+  - rlwrap
+  - net-tools
+  - dnsutils
+  - whois
+  - openvpn
+  - proxychains4
+  - socat
+
+apt_packages_web:
+  - burpsuite
+  - zaproxy
+  - sqlmap
+  - ffuf
+  - gobuster
+  - feroxbuster
+  - wfuzz
+  - nikto
+  - whatweb
+  - wpscan
+  - dirsearch
+
+apt_packages_ad:
+  - bloodhound
+  - neo4j
+  - crackmapexec
+  - impacket-scripts
+  - responder
+  - evil-winrm
+  - smbclient
+  - ldap-utils
+  - kerberos-user
+  - enum4linux-ng
+
+apt_packages_gui:
+  - flameshot
+  - obs-studio          # you record HTB walkthroughs
+  - keepassxc
+
+# -----------------------------------------------------------------------------
+# pipx — Python CLI tools, each in its own venv. Never `pip install --user`
+# on Kali; you will eventually break the system Python.
+# -----------------------------------------------------------------------------
+pipx_packages:
+  - certipy-ad
+  - name-that-hash
+  - hashid
+  - updog
+  - git-dumper
+  - uv
+
+# -----------------------------------------------------------------------------
+# Go tools — installed with `go install`. Pin versions where it matters;
+# @latest is fine for tools you actively want to track.
+# -----------------------------------------------------------------------------
+go_packages:
+  - github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+  - github.com/projectdiscovery/httpx/cmd/httpx@latest
+  - github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+  - github.com/projectdiscovery/katana/cmd/katana@latest
+  - github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+  - github.com/tomnomnom/assetfinder@latest
+  - github.com/tomnomnom/waybackurls@latest
+  - github.com/tomnomnom/gf@latest
+  - github.com/lc/gau/v2/cmd/gau@latest
+  - github.com/hahwul/dalfox/v2@latest
+
+# -----------------------------------------------------------------------------
+# Git repos cloned into /opt — tools with no package
+# -----------------------------------------------------------------------------
+opt_repos:
+  - name: PEASS-ng
+    url: https://github.com/peass-ng/PEASS-ng.git
+    version: master
+  - name: PayloadsAllTheThings
+    url: https://github.com/swisskyrepo/PayloadsAllTheThings.git
+    version: master
+  - name: GTFOBins
+    url: https://github.com/GTFOBins/GTFOBins.github.io.git
+    version: master
+  - name: kerbrute
+    url: https://github.com/ropnop/kerbrute.git
+    version: master
+
+# -----------------------------------------------------------------------------
+# Data layer — what lives in the synced volume rather than in the image
+# -----------------------------------------------------------------------------
+forge_data_root: "{{ forge_home }}/vault"
+forge_data_dirs:
+  - notes           # obsidian / markdown writeups
+  - engagements     # per-box or per-client working dirs
+  - scripts         # your own one-off tooling
+  - wordlists       # custom lists you built, not seclists
+  - loot            # credentials, hashes, dumps  (encrypted, see README)
+
+# Syncthing keeps forge_data_root identical across both VMs.
+enable_syncthing: true
+
+# -----------------------------------------------------------------------------
+# Toggles
+# -----------------------------------------------------------------------------
+enable_zsh_default: true
+enable_neovim_config: true
+enable_tmux_config: true
+enable_vmware_tools: true
+enable_neo4j_tuning: true       # BloodHound is unusable at stock heap size

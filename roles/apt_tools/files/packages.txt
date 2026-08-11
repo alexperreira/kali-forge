@@ -1,0 +1,20 @@
+# kali-forge bulk package manifest
+#
+# Replace this file wholesale with 15-packages.txt from the capture script.
+# Hundreds of lines is expected and fine.
+#
+# Format: one package name per line. Blank lines and # comments ignored.
+# Architecture suffixes (foo:amd64) are stripped automatically.
+#
+# Names that no longer exist in current Kali are filtered out before install
+# and reported, rather than aborting the run. So you can paste a list captured
+# from a five-year-old VM and it will do the right thing.
+#
+# ---------------------------------------------------------------------------
+# The placeholder below is deliberately tiny — it exists so a clone of this
+# repo works before you've run the capture. Overwrite it.
+# ---------------------------------------------------------------------------
+
+git
+curl
+tmux

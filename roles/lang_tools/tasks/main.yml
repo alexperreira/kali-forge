@@ -1,0 +1,89 @@
+---
+# Tools from language ecosystems: pipx and go.
+#
+# These are the ones that silently drift between machines, because you install
+# them at 2am mid-box and never write them down. Everything here comes from
+# group_vars/all.yml — if it isn't in that file, it doesn't exist on either VM.
+
+# -----------------------------------------------------------------------------
+# pipx
+# -----------------------------------------------------------------------------
+- name: Ensure pipx path is wired up
+  ansible.builtin.command: pipx ensurepath
+  register: lang_tools_ensurepath
+  changed_when: "'has been been added' in lang_tools_ensurepath.stdout or 'added to' in lang_tools_ensurepath.stdout"
+  failed_when: false
+
+- name: Install pipx packages
+  community.general.pipx:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ pipx_packages }}"
+  loop_control:
+    label: "{{ item }}"
+  register: lang_tools_pipx_result
+  failed_when: false
+  # failed_when: false is deliberate. A single yanked PyPI package should not
+  # abort a 20-minute provision. Failures are reported below.
+
+- name: Report pipx failures
+  ansible.builtin.debug:
+    msg: >-
+      pipx FAILED: {{ lang_tools_pipx_result.results
+        | selectattr('failed', 'defined')
+        | selectattr('failed')
+        | map(attribute='item')
+        | list }}
+  when: >-
+    lang_tools_pipx_result.results
+    | selectattr('failed', 'defined')
+    | selectattr('failed')
+    | list | length > 0
+
+# -----------------------------------------------------------------------------
+# Go
+# -----------------------------------------------------------------------------
+- name: Ensure GOPATH bin exists
+  ansible.builtin.file:
+    path: "{{ forge_home }}/go/bin"
+    state: directory
+    mode: "0755"
+
+# Derive the binary name from the module path:
+#   .../nuclei/v3/cmd/nuclei@latest -> nuclei
+#   .../hahwul/dalfox/v2@latest     -> dalfox   (naive basename gives "v2")
+- name: Check which go tools are already present
+  ansible.builtin.stat:
+    path: >-
+      {{ forge_home }}/go/bin/{{ item
+         | regex_replace('@.*$', '')
+         | regex_replace('/v[0-9]+$', '')
+         | basename }}
+  loop: "{{ go_packages }}"
+  loop_control:
+    label: "{{ item }}"
+  register: lang_tools_go_present
+
+- name: Install go tools
+  ansible.builtin.command:
+    cmd: "go install {{ item.item }}"
+  environment:
+    GOPATH: "{{ forge_home }}/go"
+    GOBIN: "{{ forge_home }}/go/bin"
+    GOPROXY: "https://proxy.golang.org,direct"
+    GOFLAGS: "-buildvcs=false"
+  loop: "{{ lang_tools_go_present.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not item.stat.exists
+  changed_when: true
+  failed_when: false
+  # `go install` is not idempotent and is slow (compiles from source), hence
+  # the stat check above. To force-refresh a tool, delete its binary from
+  # ~/go/bin and re-run. To refresh everything: rm -rf ~/go/bin && re-run.
+
+- name: Install nuclei templates
+  ansible.builtin.command:
+    cmd: "{{ forge_home }}/go/bin/nuclei -update-templates -silent"
+    creates: "{{ forge_home }}/.local/nuclei-templates"
+  failed_when: false

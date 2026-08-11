@@ -1,0 +1,83 @@
+---
+# Base system: identity, locale, sudo, and the handful of /etc changes that
+# make a fresh image feel like your machine.
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ forge_hostname }}-{{ forge_profile }}"
+  become: true
+  # Distinct hostnames per machine on purpose: when you're staring at two
+  # terminals you want to know which VM you're in. Nothing else keys off it.
+
+- name: Keep /etc/hosts consistent with the hostname
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1'
+    line: "127.0.1.1\t{{ forge_hostname }}-{{ forge_profile }}"
+    state: present
+  become: true
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ forge_timezone }}"
+  become: true
+
+- name: Ensure locale is generated
+  community.general.locale_gen:
+    name: "{{ forge_locale }}"
+    state: present
+  become: true
+
+- name: Passwordless sudo for the forge user
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ forge_user }}-forge"
+    content: "{{ forge_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    mode: "0440"
+    owner: root
+    group: root
+    validate: "visudo -cf %s"
+  become: true
+  # This is a throwaway lab VM with no inbound exposure. If you ever point
+  # this playbook at something that isn't disposable, delete this task.
+
+- name: Add user to useful groups
+  ansible.builtin.user:
+    name: "{{ forge_user }}"
+    groups: "{{ item }}"
+    append: true
+  become: true
+  loop:
+    - sudo
+    - wireshark
+    - docker
+  failed_when: false
+  # failed_when: false — wireshark/docker groups may not exist yet depending
+  # on install order. The group memberships get re-applied on the next run.
+
+- name: Create standard working directories
+  ansible.builtin.file:
+    path: "{{ forge_home }}/{{ item }}"
+    state: directory
+    owner: "{{ forge_user }}"
+    group: "{{ forge_user }}"
+    mode: "0750"
+  loop:
+    - bin
+    - .local/bin
+    - .config
+
+- name: Raise inotify watch limit
+  ansible.posix.sysctl:
+    name: fs.inotify.max_user_watches
+    value: "524288"
+    sysctl_file: /etc/sysctl.d/60-forge.conf
+    reload: true
+  become: true
+  # Syncthing and neovim LSPs both exhaust the default 8192 quickly.
+
+- name: Disable the beep
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/nobeep.conf
+    content: "blacklist pcspkr\n"
+    mode: "0644"
+  become: true

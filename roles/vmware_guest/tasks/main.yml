@@ -1,0 +1,53 @@
+---
+# VMware guest integration. The official Kali VMware image ships most of
+# this, but a rebuild from ISO won't have it, and shared folders in
+# particular are easy to get wrong.
+
+- name: Install open-vm-tools
+  ansible.builtin.apt:
+    name:
+      - open-vm-tools
+      - open-vm-tools-desktop     # clipboard + drag-drop + display resize
+    state: present
+  become: true
+
+- name: Enable vmtoolsd
+  ansible.builtin.systemd_service:
+    name: open-vm-tools
+    enabled: true
+    state: started
+  become: true
+
+- name: Check whether a VMware shared folder (HGFS) is configured
+  ansible.builtin.command: vmware-hgfsclient
+  register: vmware_guest_hgfs
+  changed_when: false
+  failed_when: false
+
+- name: Report shared folders
+  ansible.builtin.debug:
+    msg: >-
+      HGFS shares detected: {{ vmware_guest_hgfs.stdout_lines | default([]) | join(', ') or 'none' }}
+      {{ '' if vmware_guest_hgfs.stdout_lines | default([]) else
+      '-- if you intended to share a host folder, enable it in VM Settings > Options > Shared Folders.' }}
+
+- name: Mount HGFS shares at /mnt/hgfs on boot
+  ansible.posix.mount:
+    path: /mnt/hgfs
+    src: ".host:/"
+    fstype: fuse.vmhgfs-fuse
+    opts: "allow_other,defaults,nofail,uid={{ forge_user }},gid={{ forge_user }}"
+    state: mounted
+  become: true
+  when: vmware_guest_hgfs.stdout_lines | default([]) | length > 0
+  # nofail matters. Without it, a VM booted on a host that has no shared
+  # folder configured drops to an emergency shell instead of booting.
+
+- name: Do NOT put the data vault on a shared folder
+  ansible.builtin.debug:
+    msg: >-
+      Reminder: keep {{ forge_data_root }} on the VM's own disk, synced by
+      Syncthing. HGFS shared folders have broken file locking and inconsistent
+      inotify support — git repos and databases on them corrupt in ways that
+      are painful to debug.
+  when: vmware_guest_hgfs.stdout_lines | default([]) | length > 0

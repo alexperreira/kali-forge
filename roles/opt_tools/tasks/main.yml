@@ -1,0 +1,61 @@
+---
+# Git-cloned tools in /opt.
+#
+# Pinning to a branch (rather than a commit) means both machines converge on
+# the same content only if you provision them close together. For PayloadsAll-
+# TheThings that's fine. For anything you actually depend on behaving
+# identically, pin `version:` to a commit SHA in group_vars.
+
+- name: Ensure /opt is writable by the forge user
+  ansible.builtin.file:
+    path: /opt
+    state: directory
+    owner: root
+    group: "{{ forge_user }}"
+    mode: "0775"
+  become: true
+
+- name: Clone reference repos
+  ansible.builtin.git:
+    repo: "{{ item.url }}"
+    dest: "/opt/{{ item.name }}"
+    version: "{{ item.version | default('HEAD') }}"
+    depth: "{{ item.depth | default(1) }}"
+    update: "{{ item.update | default(false) }}"
+  loop: "{{ opt_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+  failed_when: false
+  # update: false by default — a re-run should not silently pull new commits
+  # and desync your two machines. Update explicitly:
+  #   ansible-playbook site.yml --tags opt -e "opt_force_update=true"
+
+- name: Force-update repos when asked
+  ansible.builtin.git:
+    repo: "{{ item.url }}"
+    dest: "/opt/{{ item.name }}"
+    version: "{{ item.version | default('HEAD') }}"
+    update: true
+    force: true
+  loop: "{{ opt_repos }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: opt_force_update | default(false) | bool
+  failed_when: false
+
+- name: Build kerbrute if present
+  ansible.builtin.command:
+    cmd: make linux
+    chdir: /opt/kerbrute
+    creates: /opt/kerbrute/dist/kerbrute_linux_amd64
+  failed_when: false
+
+- name: Link built binaries onto PATH
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ forge_home }}/.local/bin/{{ item.name }}"
+    state: link
+    force: true
+  loop:
+    - { name: kerbrute, src: /opt/kerbrute/dist/kerbrute_linux_amd64 }
+  failed_when: false

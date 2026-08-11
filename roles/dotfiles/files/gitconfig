@@ -1,0 +1,39 @@
+[user]
+	# Set these per-machine, or globally once:
+	#   git config --global user.name  "Your Name"
+	#   git config --global user.email "you@example.com"
+
+[init]
+	defaultBranch = main
+
+[core]
+	editor = nvim
+	pager = less -FRX
+	autocrlf = input
+
+[pull]
+	rebase = true
+
+[push]
+	default = current
+	autoSetupRemote = true
+
+[fetch]
+	prune = true
+
+[diff]
+	algorithm = histogram
+	colorMoved = default
+
+[merge]
+	conflictStyle = zdiff3
+
+[alias]
+	s = status -sb
+	l = log --oneline --graph --decorate -20
+	last = log -1 --stat
+	unstage = restore --staged
+
+[safe]
+	# /opt repos are root-owned but used as your user
+	directory = *

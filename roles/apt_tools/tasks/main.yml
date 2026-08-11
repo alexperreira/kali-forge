@@ -1,0 +1,170 @@
+---
+# APT packages.
+#
+# TWO MODES, and the bulk one is the default:
+#
+#   BULK (default) — roles/apt_tools/files/packages.txt holds the full package
+#     list carried over from the old VM. Hundreds of names is normal and fine.
+#     Reinstalling something the base image already has costs nothing.
+#
+#   CURATED — the apt_packages_* lists in group_vars/all.yml. These still work
+#     and are additive on top of the bulk list. Use them for things you want
+#     documented and grouped, or if you ever want a from-scratch minimal build.
+#
+# The critical detail for bulk mode: apt is all-or-nothing. One package name
+# that no longer exists in current Kali aborts the whole transaction. So the
+# role filters the manifest against the live apt cache BEFORE installing.
+# That filtering is why you can throw a 5-year-old package list at this and
+# have it work.
+
+# -----------------------------------------------------------------------------
+# Bulk manifest
+# -----------------------------------------------------------------------------
+- name: Look for a bulk package manifest
+  ansible.builtin.stat:
+    path: "{{ role_path }}/files/packages.txt"
+  register: apt_tools_manifest
+
+- name: Load and clean the manifest
+  ansible.builtin.set_fact:
+    apt_tools_wanted: >-
+      {{ lookup('ansible.builtin.file', role_path + '/files/packages.txt')
+         .splitlines()
+         | map('regex_replace', '\s*#.*$', '')
+         | map('regex_replace', ':[a-z0-9]+$', '')
+         | map('trim')
+         | reject('match', '^$')
+         | unique | sort }}
+  when: apt_tools_manifest.stat.exists
+
+- name: Report manifest size
+  ansible.builtin.debug:
+    msg: "Bulk manifest: {{ apt_tools_wanted | length }} packages requested"
+  when: apt_tools_manifest.stat.exists
+
+# Pre-flight filter. `apt-cache pkgnames` lists every name apt knows about;
+# anything not in it would abort the install transaction.
+- name: Index package names known to apt
+  ansible.builtin.shell:
+    cmd: "set -o pipefail && apt-cache pkgnames | sort -u"
+    executable: /bin/bash
+  register: apt_tools_known
+  changed_when: false
+  when: apt_tools_manifest.stat.exists
+
+- name: Split the manifest into installable and retired
+  ansible.builtin.set_fact:
+    apt_tools_installable: "{{ apt_tools_wanted | intersect(apt_tools_known.stdout_lines) }}"
+    apt_tools_retired: "{{ apt_tools_wanted | difference(apt_tools_known.stdout_lines) }}"
+  when: apt_tools_manifest.stat.exists
+
+- name: Report retired package names
+  ansible.builtin.debug:
+    msg:
+      - "{{ apt_tools_retired | length }} package(s) in the manifest no longer exist in Kali."
+      - "Skipping them so the install can proceed: {{ apt_tools_retired | join(', ') }}"
+      - "Run scripts/validate-package-list.sh for rename suggestions."
+  when:
+    - apt_tools_manifest.stat.exists
+    - apt_tools_retired | length > 0
+
+- name: Install the bulk manifest
+  ansible.builtin.apt:
+    name: "{{ apt_tools_installable }}"
+    state: present
+    install_recommends: false
+  become: true
+  when:
+    - apt_tools_manifest.stat.exists
+    - apt_tools_installable | length > 0
+  # One transaction on purpose. apt resolves the whole set together, which is
+  # dramatically faster than looping and produces better dependency choices.
+  # install_recommends: false keeps a 900-package list from dragging in another
+  # 2000 packages of recommends. Drop it if you'd rather have the full set.
+
+# -----------------------------------------------------------------------------
+# Curated groups (additive, and still useful even in bulk mode)
+# -----------------------------------------------------------------------------
+- name: Install core packages
+  ansible.builtin.apt:
+    name: "{{ apt_packages_core }}"
+    state: present
+  become: true
+
+- name: Install web-app testing packages
+  ansible.builtin.apt:
+    name: "{{ apt_packages_web }}"
+    state: present
+  become: true
+  register: apt_tools_web_pkgs
+  failed_when:
+    - apt_tools_web_pkgs.failed | default(false)
+    - "'has no installation candidate' not in (apt_tools_web_pkgs.msg | default(''))"
+
+- name: Install Active Directory tooling
+  ansible.builtin.apt:
+    name: "{{ apt_packages_ad }}"
+    state: present
+  become: true
+  when: profile.install_ad_tooling | bool
+
+- name: Install GUI extras
+  ansible.builtin.apt:
+    name: "{{ apt_packages_gui }}"
+    state: present
+  become: true
+  when: profile.install_heavy_gui | bool
+
+- name: Install SecLists
+  ansible.builtin.apt:
+    name: seclists
+    state: present
+  become: true
+  when: profile.install_seclists | bool
+
+# -----------------------------------------------------------------------------
+# Post-install tweaks
+# -----------------------------------------------------------------------------
+- name: Decompress rockyou
+  ansible.builtin.command:
+    cmd: gunzip -k /usr/share/wordlists/rockyou.txt.gz
+    creates: /usr/share/wordlists/rockyou.txt
+  become: true
+
+- name: Restore the manual/auto mark state
+  ansible.builtin.command:
+    cmd: "apt-mark manual {{ apt_tools_installable | join(' ') }}"
+  become: true
+  when:
+    - apt_tools_manifest.stat.exists
+    - apt_tools_installable | length > 0
+  changed_when: false
+  # Without this, packages that arrived as dependencies stay marked 'auto' and
+  # a later `apt autoremove` quietly deletes tools you meant to keep. This is
+  # the single most annoying failure mode of a bulk transfer, and it shows up
+  # weeks later when you least expect it.
+
+- name: Tune neo4j heap for BloodHound
+  ansible.builtin.blockinfile:
+    path: /etc/neo4j/neo4j.conf
+    marker: "# {mark} kali-forge"
+    block: |
+      server.memory.heap.initial_size=1G
+      server.memory.heap.max_size=2G
+      server.memory.pagecache.size=1G
+    create: false
+  become: true
+  when:
+    - enable_neo4j_tuning | bool
+    - profile.install_ad_tooling | bool
+  failed_when: false
+  notify: Restart neo4j
+
+- name: Do not enable neo4j at boot
+  ansible.builtin.systemd_service:
+    name: neo4j
+    enabled: false
+  become: true
+  when: profile.install_ad_tooling | bool
+  failed_when: false
+  # It eats 2GB idle. Start it when you need BloodHound: sudo neo4j start

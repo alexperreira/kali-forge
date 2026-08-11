@@ -1,0 +1,28 @@
+# Never commit these. This file is load-bearing.
+
+# Capture output — contains your package lists and possibly config with tokens
+kali-state-*/
+kali-state-*.tar.gz
+
+# Anything resembling a secret
+*.pem
+*.key
+*.p12
+*.ovpn
+*.kdbx
+.vault_pass
+vault_pass.txt
+secrets.yml
+!secrets.yml.example
+
+# Ansible runtime
+*.retry
+.ansible/
+/tmp/
+
+# Editor
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
